@@ -1,107 +1,96 @@
+# S3 Backup & Restore Terminal App (macOS)
+
+Interactive terminal application (English UI) to create backup and restore routines using AWS S3.
+
+## Features
+
+- Menu-driven navigation for all operations.
+- At any point where a path is needed, user can paste the full backup/restore path.
+- Configurable backup routines:
+  - source path
+  - S3 destination prefix
+  - frequency
+  - retention count (how many versions to keep)
+- Backup now and restore by prefix.
+- Default strategy generator:
+  - Monthly, keep 12
+  - Weekly, keep 4
+  - Every 2 hours, keep previous day (12 snapshots)
+
+## Requirements
+
+- macOS terminal
+- Python 3.9+
+- AWS credentials configured locally (`~/.aws/credentials`)
+- Python package: `boto3`
+
+## Install
+
+```bash
+python3 -m pip install boto3
+```
+
+## Run
+
+```bash
+python3 app.py
+```
+
+## Notes
+
+- Data is saved in `~/.s3_backup_cli/config.json`.
+- Retention cleanup runs after a successful backup execution.
 # S3App
 
-## Review: S3 bucket existence handling and daemonized backup routine
+## Review notes for requested menu behavior
 
-This review focuses on two product behaviors:
+I reviewed the repository and there is currently no application source code committed yet (only this README).
 
-1. **Do not quit the application if the S3 bucket does not exist**.
-2. **Provide an option to run backup routines continuously as a daemon**.
+To facilitate your request once the menu code is available, implement the following behavior:
 
----
+### 1) ESC should navigate back in menus
 
-### 1) Graceful handling when bucket does not exist
+- Add a global key handler for `Escape` in the menu/screen container.
+- When pressed:
+  - If a submenu is open, close it and focus the parent menu item.
+  - Else if there is navigation history, pop one level (`goBack`).
+  - Else do nothing.
+- Do **not** trigger browser/page-level side effects while typing in text fields.
 
-Current desired behavior:
+### 2) "Hot edit" backup routine flow
 
-- If the configured bucket is missing, the application should **stay running**.
-- The application should return a clear status and provide a direct URL so the user can create the bucket.
+If by "hot edit" you mean quick-editing a backup routine from the current menu:
 
-Recommended behavior:
+- Define a keyboard shortcut (for example `E`) while a backup routine row is focused.
+- Open edit mode in place without requiring full navigation.
+- Save with `Enter`, cancel with `Escape` (which should return to the previous menu context).
 
-- At startup, validate bucket existence using `HeadBucket`.
-- If the bucket exists, continue normal processing.
-- If the bucket does not exist:
-  - Keep process alive.
-  - Mark health state as `degraded` (not `down`).
-  - Return a message with the create URL and region hint.
-  - Retry validation on a configurable interval.
+### Suggested implementation pattern
 
-Create-bucket URL pattern:
+- Keep a stack-based menu state: `menuStack: MenuState[]`.
+- Centralize keyboard behavior in one handler.
+- Guard against repeated keydown firing by debouncing/repeat checks.
 
-```text
-https://s3.console.aws.amazon.com/s3/bucket/create?region=<AWS_REGION>
-```
-
-User-facing message example:
+Pseudo-flow:
 
 ```text
-Configured bucket "<BUCKET_NAME>" was not found in region "<AWS_REGION>".
-The application will keep running and retry every 60s.
-Create bucket: https://s3.console.aws.amazon.com/s3/bucket/create?region=<AWS_REGION>
+onKeyDown(event):
+  if target is input/textarea/contenteditable:
+    if event.key === 'Escape' and inInlineEdit:
+      cancelInlineEdit()
+    return
+
+  if event.key === 'Escape':
+    if inInlineEdit:
+      cancelInlineEdit(); restoreFocus(); return
+    if menuStack.length > 1:
+      menuStack.pop(); restoreFocus(); return
+    return
+
+  if event.key === 'e' and focusedItem.type === 'backupRoutine':
+    enterInlineEdit(focusedItem.id)
 ```
 
-Operational notes:
+## Next step
 
-- Treat only `NotFound` / `NoSuchBucket` as recoverable missing-resource states.
-- For credential/network errors, also keep process alive but return a distinct `error` state.
-- Add metrics:
-  - `bucket_check_total`
-  - `bucket_missing_total`
-  - `bucket_available` (gauge)
-
----
-
-### 2) Option to run backup routine as a daemon
-
-Current desired behavior:
-
-- Backups should be reviewable and optionally run continuously in the background.
-
-Recommended interface:
-
-- Add execution mode option:
-  - `--backup-mode=once` (single run)
-  - `--backup-mode=daemon` (continuous schedule loop)
-- Add scheduling option:
-  - `--backup-interval=60s` (or cron expression if needed)
-
-Daemon loop expectations:
-
-- Process starts and logs selected mode.
-- In daemon mode:
-  - Perform preflight checks.
-  - Run backup.
-  - Persist result (success/failure, timestamp, size, duration).
-  - Sleep until next interval.
-  - Continue after non-fatal errors.
-
-Review visibility:
-
-- Add a local/state file or endpoint for latest runs:
-  - `last_run_at`
-  - `last_status`
-  - `last_error`
-  - `objects_uploaded`
-  - `bytes_uploaded`
-- Keep a rolling history (for example, last 50 runs).
-
-Reliability recommendations:
-
-- Add jitter to interval to avoid thundering herd.
-- Add lockfile or distributed lock to prevent overlapping runs.
-- Add max runtime guard so stuck jobs are marked failed.
-- Expose `SIGTERM` handling for graceful shutdown.
-
----
-
-## Proposed acceptance criteria
-
-- Missing bucket no longer exits process.
-- Missing bucket response includes AWS create-bucket URL.
-- Backup routine supports both one-shot and daemon modes.
-- Daemon mode continues after recoverable failures.
-- Run history is available for operator review.
-
-## Suggested next implementation step
-
-Implement a `BucketStatusService` and `BackupScheduler` abstraction so bucket validation and daemonized backup orchestration are testable independently from CLI and transport layers.
+Once actual app files are added, I can wire this behavior directly into the real menu/navigation components.
